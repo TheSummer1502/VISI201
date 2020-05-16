@@ -1,0 +1,164 @@
+Importation de la base de donnée CSV pour le systeme de recomandation de films :
+
+
+Création des noeuds Films et leurs paramètres:
+LOAD CSV WITH HEADERS FROM "https://www.dropbox.com/s/fq44x3m11y9yozs/u.item.csv?dl=1" as line
+fieldterminator '|' WITH line LIMIT 200 
+CREATE (f:Film)
+SET f.titre = line.title,
+f.idFilm = toInteger(line.id),
+f.date = line.release
+
+Création des noeuds Genre et leurs paramètres:
+LOAD CSV WITH HEADERS FROM "https://www.dropbox.com/s/fq44x3m11y9yozs/u.item.csv?dl=1" as line
+fieldterminator '|' WITH line LIMIT 250 
+WHERE line.nomGenreDansLaBase = "1"
+CREATE (:Genre{genre:"nomGenre", idGenre:toInteger(line.id)})
+
+Création des relations entre Films et Genres :
+MATCH (f:Film)
+MATCH (g:Genre)
+WHERE f.idFilm = g.idGenre
+CREATE (f)-[:DU_GENRE]->(g)
+
+Voir résultat Films/Genres:
+MATCH (f:Film)-[r]->(g:Genre)
+RETURN f,r,g LIMIT 50
+
+Création des noeuds Genre et leurs paramètres:
+LOAD CSV WITH HEADERS FROM "https://www.dropbox.com/s/piz58gre87s9miu/u.user.csv?dl=1" as line
+fieldterminator '|' WITH line LIMIT 250 CREATE (u:Utilisateur)
+SET u.age = toInteger(line.age),
+u.sexe = line.gender,
+u.travail = line.occupation,
+u.idUtilisateur = toInteger(line.id)
+
+Création des relation entre utilisateurs et films :
+LOAD CSV WITH HEADERS FROM "https://www.dropbox.com/s/vt28mlhaz129mcb/u.data.csv?dl=1" as line
+fieldterminator '|' WITH line LIMIT 8000
+MATCH (u:Utilisateur)
+MATCH (f:Film)
+WHERE u.idUtilisateur = toInteger(line.userid) AND f.idFilm = toInteger(line.itemid)
+CREATE (u)-[:A_VU {note:toInteger(line.rating)}]->(f)
+
+=============================================================================
+Recherche de similartité et système de recomandation :
+
+
+Liste des 10 utilisateur les plus similaire avec l'indice de Jaccard :
+MATCH (u1)-[:A_VU]->(f:Film)<-[:A_VU]-(u2)
+WITH u1, u2, count(distinct f) as inter
+MATCH (u1)-[:A_VU]->(f:Film)
+WITH u1, count(distinct f) as nb_u1, u2,inter
+MATCH (u2)-[:A_VU]->(f:Film)
+WITH u2, count(distinct f) as nb_u2, u1, inter, nb_u1
+RETURN u1.idUtilisateur, u2.idUtilisateur, inter, nb_u1, nb_u2, inter*1.0/(nb_u1+nb_u2-inter) as jaccard ORDER BY jaccard DESC LIMIT 10
+
+
+Liste des 10 utilisateur ayant 5 films en commun les plus similaire 
+avec l'indice de Jaccard :
+
+MATCH (u1)-[:A_VU]->(f:Film)<-[:A_VU]-(u2)
+WITH u1, count(distinct f) as inter, u2
+WHERE inter >= 5
+MATCH (u1)-[:A_VU]->(f:Film)
+WITH u1, count(distinct f) as nb_u1, u2,inter
+MATCH (u2)-[:A_VU]->(f:Film)
+WITH u2, count(distinct f) as nb_u2, u1, inter, nb_u1
+RETURN u1.idUtilisateur, u2.idUtilisateur, inter, nb_u1, nb_u2, inter*1.0/(nb_u1+nb_u2-inter) as jacard ORDER BY jacard DESC LIMIT 10
+
+Liste de recommandation pour l'utilisateur 117 (u2):
+MATCH (u1)-[:A_VU]->(f1:Film), (u2)-[:A_VU]->(f2:Film)
+WHERE u1.idUtilisateur = 162 AND u2.idUtilisateur = 117
+WITH collect(distinct f1.titre) AS l1, collect(distinct f2.titre) AS l2
+RETURN filter(film IN l1 WHERE NOT film IN l2) AS recomandationPrU2
+
+Liste de recommandation pour l'utilisateur 162 (u1):
+MATCH (u1)-[:A_VU]->(f1:Film), (u2)-[:A_VU]->(f2:Film)
+WHERE u1.idUtilisateur = 162 AND u2.idUtilisateur = 117
+WITH collect(distinct f1.titre) AS l1, collect(distinct f2.titre) AS l2
+RETURN filter(film IN l2 WHERE NOT film IN l1) AS recomandationPrU1
+
+==================================================================================
+Base de donnée sur le Covid-19 :
+
+
+Création des noeuds Patient, Ville, Pays et leurs relations :
+LOAD CSV WITH HEADERS FROM "https://www.dropbox.com/s/po34ry4oil634yg/COVID19_line_list_data.csv?dl=1" as line 
+WITH line LIMIT 800
+MERGE (p:Pays {nom:line.country})
+MERGE (v:Ville {nom:line.location})
+CREATE (pa:Patient)
+SET
+pa.date_symptome = line.symptom_onset,
+pa.age = toInteger(line.age),
+pa.sexe = line.gender,
+pa.a_visite_wuhan = toInteger(line.`visiting Wuhan`),
+pa.vient_de_wuhan = toInteger(line.`from Wuhan`),
+pa.id = toInteger(line.id)
+CREATE (pa)-[:RESIDE]->(v)
+MERGE (v)-[:LOCALISE]->(p)
+
+Voir resultat en France :
+MATCH (pa:Patient)-[:RESIDE]->(v:Ville)-[:LOCALISE]->(p:Pays)
+WHERE p.nom = "France"
+RETURN pa,v,p
+
+Changer la date de chaine de caractère à entier :
+MATCH (p:Patient)
+WHERE p.date_symptome <> "NA"
+WITH split(p.date_symptome, '/') AS liste,p
+SET p.mois = toInteger(liste[0]), p.jour = toInteger(liste[1]), p.annee = toInteger(liste[2])
+
+Création des relations contamination potentiel :
+MATCH (p1:Patient)-[]->(v:Ville)<-[]-(p2:Patient)
+WHERE (p1.date_symptome <> "NA") AND (p2.date_symptome <> "NA") AND ((p2.annee < p1.annee) OR (p2.annee = p1.annee AND p2.mois < p1.mois) OR (p2.annee = p1.annee AND p2.mois = p1.mois AND p2.jour < p1.jour))
+CREATE (p2)-[r:CONTAMINATION_POTENTIEL]->(p1)
+
+Voir le résultat pour la ville de Gansu :
+MATCH (pa:Patient)-[:RESIDE]->(v:Ville)
+WHERE v.nom = "Gansu" AND pa.date_symptome <> "NA" AND pa.date_symptome IS NOT NULL
+RETURN pa,v
+
+Voir le résultat pour la ville de Sichuan :
+MATCH (pa:Patient)-[:RESIDE]->(v:Ville)
+WHERE v.nom = "Sichuan" AND pa.date_symptome <> "NA" AND pa.date_symptome IS NOT NULL
+RETURN pa,v
+
+Voir résultat pour la Chine :
+MATCH (pa:Patient)-[:RESIDE]->(v:Ville)-[:LOCALISE]->(p:Pays)
+WHERE p.nom = "France" AND pa.date_symptome <> "NA" AND pa.date_symptome IS NOT NULL
+RETURN pa,v,p
+
+Calculs nombres personnes à Wuhan :
+MATCH (p1:Patient)
+WHERE p1.a_visite_wuhan = 1 AND (p1.vient_de_wuhan = 0 OR p1.vient_de_wuhan IS NULL) //Il y a 1 cas ou a visité wuhan et vient de wuhan = 1
+WITH count(p1) AS nbrWuhan
+MATCH (p2:Patient)
+WHERE (p2.a_visite_wuhan = 0 AND p2.vient_de_wuhan = 0) OR (p2.vient_de_wuhan IS NULL AND p2.a_visite_wuhan = 0) //Il ya 4 cas ou il n'y a pas d'infos sur vient de wuhan
+WITH nbrWuhan, count(p2) AS nbrNonWuhan
+MATCH (p3:Patient)
+WHERE p3.vient_de_wuhan = 1
+WITH nbrWuhan, nbrNonWuhan, count(p3) AS nbrVientDeWuhan
+RETURN nbrWuhan, nbrVientDeWuhan, nbrNonWuhan, nbrWuhan+nbrVientDeWuhan AS totalWuhan, nbrWuhan+nbrNonWuhan+nbrVientDeWuhan AS total
+
+Changer les 20 en 2020 et 19 en 2019 :
+MATCH (p:Patient)-[r]->(v:Ville)-[]->(py:Pays)
+WHERE p.annee = 19
+SET p.annee = 2019
+
+MATCH (p:Patient)-[r]->(v:Ville)-[]->(py:Pays)
+WHERE p.annee = 20
+SET p.annee = 2020
+
+30 premier infecté de la base de donnée :
+MATCH (p:Patient)-[r]->(v:Ville)-[]->(py)
+WHERE p.date_symptome IS NOT NULL AND p.date_symptome <> "NA"
+WITH v, r, py, p AS liste ORDER BY p.annee,p.mois,p.jour
+RETURN v, py, liste LIMIT 30
+
+Liste des pays par ordre de propagation du virus :
+MATCH (pa:Patient)-[]->(:Ville)-[]->(p:Pays)
+WHERE pa.date_symptome IS NOT NULL AND pa.date_symptome <> "NA"
+WITH p AS listePays ORDER BY pa.annee,pa.mois,pa.jour
+RETURN DISTINCT listePays
